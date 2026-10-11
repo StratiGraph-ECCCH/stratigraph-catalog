@@ -80,7 +80,9 @@ function studyCard(study) {
   const head = el("div", "study-head");
   head.append(el("span", "study-title", study.title || study.id));
   // the PID is what somebody cites: mono, and never truncated away
-  if (study.em_id) head.append(el("span", "pid", study.em_id));
+  // the study's code (E.D., 11 Oct 2026); a card from before has only em_id
+  const code = study.code || study.em_id;
+  if (code) head.append(el("span", "pid", code));
   if (study.kind) head.append(el("span", "tag quiet", study.kind));
   if (study.visibility && study.visibility !== "public") {
     head.append(el("span", "tag embargo", study.visibility));

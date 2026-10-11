@@ -685,8 +685,9 @@ def landscape_view(study_id: str, request: Request,
 
     The composition is a list of REFERENCES the container carries, so this
     resolves them against the index — by the catalogue's own id first, then by
-    the study's `em_id`, because whoever wrote the landscape had whichever of
-    the two to hand.
+    the study's code (`code`, or the retired `em_id` with the same value, E.D.
+    11 Oct 2026), because whoever wrote the landscape had whichever of the two
+    to hand.
 
     A reference that resolves to nothing is **reported, not dropped**:
     `missing` names it. A landscape quietly listing three of its four sites is
@@ -704,9 +705,10 @@ def landscape_view(study_id: str, request: Request,
         found = None
         if ref.get("id"):
             found = INDEX.get(str(ref["id"]))
-        if found is None and ref.get("em_id"):
+        code = ref.get("code") or ref.get("em_id")
+        if found is None and code:
             found = next((c for c in INDEX.search()
-                          if c.get("em_id") == ref["em_id"]), None)
+                          if code in (c.get("code"), c.get("em_id"))), None)
         if found is None:
             missing.append(ref)
         elif authenticated or is_public_now(found):

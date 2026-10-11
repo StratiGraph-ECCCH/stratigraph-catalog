@@ -155,6 +155,30 @@ def test_a_landscape_may_cite_its_sites_by_em_id(client):
     assert [s["id"] for s in view["sites"]] == [a["id"]]
 
 
+def test_a_landscape_may_cite_its_sites_by_the_study_code(client):
+    """E.D., 11 Oct 2026: the study's code (GT16) replaces the em_id, with the
+    same value. A composition citing `code` resolves; so does a card that has
+    the code only through its em_id."""
+    from s3dgraphy.hdto import declare_hdto
+    from s3dgraphy.container import parse_container, build_container
+    doc = site("s-code", "Villa C", entity=("hc1_a", "Villa A"))
+    container, _ = parse_container(doc)
+    declare_hdto(container.active(), study={"name": "Villa C", "code": "VC16"})
+    a = _register(client, build_container(container))
+    card = client.get(f"/catalog/study/{a['id']}").json()
+    assert card["code"] == "VC16"
+    old = _register(client, site("s-old", "Villa D", entity=("hc1_a", "Villa A")))
+    old_card = client.get(f"/catalog/study/{old['id']}").json()
+    land = _register(client, landscape(
+        "L5", "Valle", parts=[{"code": "VC16"}, {"code": old_card["em_id"]}],
+        entities=[("hc1_a", "Villa A")]))
+    view = client.get(f"/catalog/landscape/{land['id']}").json()
+    assert [s["id"] for s in view["sites"]] == [a["id"], old["id"]]
+    assert view["missing"] == []
+    found = client.get("/catalog/studies", params={"q": "vc16"}).json()
+    assert a["id"] in [s["id"] for s in found["studies"]]
+
+
 def test_asking_a_site_for_its_composition_is_an_empty_answer_not_an_error(client):
     a = _register(client, site("s-solo", "Un sito", entity=("hc1_a", "Villa A")))
     view = client.get(f"/catalog/landscape/{a['id']}")

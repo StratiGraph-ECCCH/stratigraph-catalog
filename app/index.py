@@ -235,12 +235,15 @@ def _better_entity(current: Optional[Dict[str, Any]],
 def _haystack(card: Dict[str, Any]) -> str:
     """The free-text field, built once at write time.
 
-    Title, description, the authors' names, the site key and the twin's name:
+    Title, description, the authors' names, the study's code (and the retired
+    site key, `em_id`, which a card written before 11 Oct 2026 has alone) and
+    the twin's name:
     what somebody actually types when they are looking for a study. Built here
     rather than at query time because an index that has to open every card to
     answer a search is a scan wearing an index's clothes.
     """
-    parts = [card.get("title"), card.get("description"), card.get("em_id")]
+    parts = [card.get("title"), card.get("description"), card.get("code"),
+             card.get("em_id")]
     for author in card.get("authors") or []:
         parts.append(author.get("name"))
         parts.append(author.get("orcid"))
