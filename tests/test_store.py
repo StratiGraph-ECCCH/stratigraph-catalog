@@ -1,15 +1,16 @@
 """The container store — where the truth lives, and how it is named.
 
-Measured headless against the in-memory implementation; the MinIO one is the same
-interface and is exercised live by `dev-stack/smoke_catalog.py` (declared: it
-needs a running MinIO, so it is not in this suite).
+Measured headless against the in-memory implementation; the S3 one is the same
+interface and is exercised live by `tests/test_store_s3.py` against a real
+S3-compatible store (RustFS in the dev-stack — skipped, by name, without one)
+and by `dev-stack/smoke_catalog.py`.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from app.store import (InMemoryContainerStore, MinioContainerStore,
+from app.store import (InMemoryContainerStore, S3ContainerStore,
                        bytes_digest, container_bytes, describe, object_key,
                        store_from_env, study_id_from_key)
 
@@ -57,23 +58,33 @@ def test_a_half_configured_object_store_refuses_to_start():
     """The failure that matters. Falling back to memory on a typo'd variable
     produces a catalogue whose studies quietly disappear on the next restart."""
     with pytest.raises(RuntimeError, match="half-configured"):
-        store_from_env({"MINIO_ENDPOINT": "http://minio:9000",
-                        "MINIO_ACCESS_KEY": "key"})
+        store_from_env({"EM_ASSET_S3_ENDPOINT": "http://rustfs:9000",
+                        "EM_ASSET_S3_ACCESS_KEY": "key"})
 
 
-def test_a_full_configuration_selects_minio(monkeypatch):
-    """Selected by configuration alone — the construction itself reaches the
-    server, so it is measured live in the smoke rather than faked here."""
+_FULL = {"EM_ASSET_S3_ENDPOINT": "http://rustfs:9000",
+         "EM_ASSET_S3_ACCESS_KEY": "key",
+         "EM_ASSET_S3_SECRET_KEY": "secret",
+         "EM_ASSET_S3_BUCKET": "em-dev"}
+
+
+def _fake_construction(monkeypatch):
     built = {}
 
     def fake_init(self, endpoint, access_key, secret_key, bucket, secure=True):
         built.update(endpoint=endpoint, bucket=bucket, secure=secure)
+        self.endpoint, self.bucket = endpoint, bucket
 
-    monkeypatch.setattr(MinioContainerStore, "__init__", fake_init)
-    store = store_from_env({"MINIO_ENDPOINT": "http://minio:9000",
-                            "MINIO_ACCESS_KEY": "key",
-                            "MINIO_SECRET_KEY": "secret",
-                            "MINIO_BUCKET": "em-dev"})
-    assert isinstance(store, MinioContainerStore)
-    assert built == {"endpoint": "http://minio:9000", "bucket": "em-dev",
+    monkeypatch.setattr(S3ContainerStore, "__init__", fake_init)
+    return built
+
+
+def test_a_full_configuration_selects_s3(monkeypatch):
+    """Selected by configuration alone — the construction itself reaches the
+    server, so it is measured live in `test_store_s3.py` rather than faked here."""
+    built = _fake_construction(monkeypatch)
+    store = store_from_env(dict(_FULL))
+    assert isinstance(store, S3ContainerStore)
+    assert built == {"endpoint": "http://rustfs:9000", "bucket": "em-dev",
                      "secure": False}, "http:// means somebody chose plain"
+    assert describe(store) == "s3 (http://rustfs:9000, bucket em-dev, prefix studies/)"

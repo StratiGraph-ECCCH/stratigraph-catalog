@@ -8,8 +8,8 @@ containers ever disagree, the containers win and `reindex` proves it by rebuildi
 the index from them.
 
 Same shape as StratiGraph Server's `assets.py`, and deliberately so: an interface of four
-methods, an in-memory implementation that says it is for tests, and MinIO as the
-deployment target — a line of configuration, not a rewrite.
+methods, an in-memory implementation that says it is for tests, and an S3
+object store (RustFS in the dev stack) as the deployment target — a line of configuration, not a rewrite.
 
 **Not content-addressed, and this is the one real difference from an asset.** An
 asset is immutable bytes and its name IS its digest; a *study* evolves under a
@@ -120,7 +120,7 @@ class InMemoryContainerStore:
     """For tests and a laptop run — and it says so.
 
     Not the deployment target: it dies with the process, which is the property
-    the MinIO implementation exists to remove. A catalogue whose truth lives here
+    the S3 implementation exists to remove. A catalogue whose truth lives here
     has no truth.
     """
 
@@ -142,9 +142,9 @@ class InMemoryContainerStore:
         return json.loads(data.decode("utf-8")) if data is not None else None
 
     def list(self) -> List[str]:
-        # FILTERED, as MinIO's already was. Without this the two implementations
-        # disagree the moment anything that is not a study is written to the
-        # store: MinIO lists `prefix=studies/` and this one listed everything,
+        # FILTERED, as the S3 one's already was. Without this the two
+        # implementations disagree the moment anything that is not a study is
+        # written to the store: S3 lists `prefix=studies/` and this one listed everything,
         # so a register file would come back as a study id and `reindex` would
         # try to parse it. Same bucket, same answer.
         return sorted(study_id_from_key(k) for k in self._blobs
@@ -167,169 +167,129 @@ class InMemoryContainerStore:
             return self._blobs.pop(str(key), None) is not None
 
 
-class MinioContainerStore:
+class S3ContainerStore:
     """The deployment target: the studies live in the object store.
 
-    The `minio` client is a hard dependency of this service (see pyproject), so a
-    missing one is a broken build rather than a configuration choice — but the
-    construction still fails **here**, with a sentence, rather than at the first
-    upload with a stack trace from inside a request.
+    Any S3-compatible store — RustFS in the dev stack — reached with `boto3`
+    through `s3client.make_client` (path-style, SigV4, no proxy). `boto3` is a
+    hard dependency of this service (see pyproject), so a missing one is a
+    broken build rather than a configuration choice — but the construction
+    still fails **here**, with a sentence, rather than at the first upload with
+    a stack trace from inside a request.
     """
 
     def __init__(self, endpoint: str, access_key: str, secret_key: str,
                  bucket: str, secure: bool = True) -> None:
+        from . import s3client
+
         try:
-            from minio import Minio  # type: ignore
+            self._client = s3client.make_client(endpoint, access_key,
+                                                secret_key, secure)
         except ImportError as exc:  # pragma: no cover — depends on the build
             raise RuntimeError(
-                "the MinIO container store needs the `minio` client, which this "
-                "build does not have: pip install minio") from exc
-
+                "the S3 container store needs the `boto3` client, which this "
+                "build does not have: pip install boto3") from exc
         self.bucket = bucket
         self.endpoint = endpoint
-        # host:port WITHOUT a scheme, the scheme as a flag — passing the URL
-        # whole is the first thing that goes wrong here
-        host = endpoint.split("://", 1)[-1].rstrip("/")
-        self._client = Minio(host, access_key=access_key, secret_key=secret_key,
-                             secure=secure)
         self._ensure_bucket()
 
     def _ensure_bucket(self) -> None:
-        from minio.error import S3Error  # type: ignore
+        from . import s3client
 
+        ClientError = s3client.client_error()
         try:
-            if not self._client.bucket_exists(self.bucket):
-                self._client.make_bucket(self.bucket)
-        except S3Error as exc:
+            s3client.ensure_bucket(self._client, self.bucket)
+        except ClientError as exc:
             raise RuntimeError(
                 f"the bucket '{self.bucket}' is not usable at {self.endpoint}: "
-                f"{exc.code}. Either it does not exist and these credentials may "
-                f"not create it, or they may not read it") from exc
+                f"{s3client.error_code(exc)}. Either it does not exist and these "
+                f"credentials may not create it, or they may not read it") from exc
         except Exception as exc:      # network, DNS, TLS: not an S3 answer at all
             raise RuntimeError(
                 f"the object store at {self.endpoint} did not answer: {exc}. "
                 f"StratiGraph Catalog will not start without the store that holds its "
                 f"truth") from exc
 
+    def _exists(self, key: str) -> bool:
+        from . import s3client
+
+        return s3client.exists(self._client, self.bucket, key)
+
     def put(self, study_id: str, doc: Dict[str, Any]) -> Dict[str, Any]:
-        import io
-
-        from minio.error import S3Error  # type: ignore
-
         data = container_bytes(doc)
         key = object_key(study_id)
-        created = True
-        try:
-            self._client.stat_object(self.bucket, key)
-            created = False
-        except S3Error as exc:
-            if exc.code not in ("NoSuchKey", "NoSuchObject", "NotFound"):
-                raise
-        self._client.put_object(self.bucket, key, io.BytesIO(data), len(data),
-                                content_type=MEDIA_TYPE)
+        created = not self._exists(key)
+        self._client.put_object(Bucket=self.bucket, Key=key, Body=data,
+                                ContentType=MEDIA_TYPE)
         return {"key": key, "sha256": bytes_digest(data), "size": len(data),
                 "created": created}
 
     def get(self, study_id: str) -> Optional[Dict[str, Any]]:
-        from minio.error import S3Error  # type: ignore
-
-        response = None
-        try:
-            response = self._client.get_object(self.bucket, object_key(study_id))
-            return json.loads(response.read().decode("utf-8"))
-        except S3Error as exc:
-            if exc.code in ("NoSuchKey", "NoSuchObject", "NotFound"):
-                return None
-            raise
-        finally:
-            if response is not None:
-                response.close()
-                response.release_conn()
+        data = self.get_blob(object_key(study_id))
+        return json.loads(data.decode("utf-8")) if data is not None else None
 
     def list(self) -> List[str]:
-        found: Iterable[Any] = self._client.list_objects(
-            self.bucket, prefix=STUDY_PREFIX, recursive=True)
-        return sorted(study_id_from_key(obj.object_name) for obj in found
-                      if obj.object_name.endswith(STUDY_SUFFIX))
+        from . import s3client
+
+        found: Iterable[Dict[str, Any]] = s3client.iter_objects(
+            self._client, self.bucket, prefix=STUDY_PREFIX)
+        return sorted(study_id_from_key(obj["key"]) for obj in found
+                      if obj["key"].endswith(STUDY_SUFFIX))
 
     def remove(self, study_id: str) -> bool:
-        from minio.error import S3Error  # type: ignore
-
-        key = object_key(study_id)
-        try:
-            self._client.stat_object(self.bucket, key)
-        except S3Error as exc:
-            if exc.code in ("NoSuchKey", "NoSuchObject", "NotFound"):
-                return False
-            raise
-        self._client.remove_object(self.bucket, key)
-        return True
+        return self.remove_blob(object_key(study_id))
 
     def get_blob(self, key: str) -> Optional[bytes]:
-        from minio.error import S3Error  # type: ignore
+        from . import s3client
 
-        response = None
         try:
-            response = self._client.get_object(self.bucket, str(key))
-            return response.read()
-        except S3Error as exc:
-            if exc.code in ("NoSuchKey", "NoSuchObject", "NotFound"):
+            response = self._client.get_object(Bucket=self.bucket, Key=str(key))
+        except Exception as exc:                   # noqa: BLE001 — re-raised
+            if s3client.is_not_found(exc):
                 return None
             raise
-        finally:
-            if response is not None:
-                response.close()
-                response.release_conn()
+        return s3client.read_body(response)
 
     def put_blob(self, key: str, data: bytes) -> Dict[str, Any]:
-        import io as _io
-
-        self._client.put_object(self.bucket, str(key), _io.BytesIO(data),
-                                len(data), content_type=MEDIA_TYPE)
+        self._client.put_object(Bucket=self.bucket, Key=str(key),
+                                Body=bytes(data), ContentType=MEDIA_TYPE)
         return {"key": str(key), "sha256": bytes_digest(data), "size": len(data)}
 
     def remove_blob(self, key: str) -> bool:
-        from minio.error import S3Error  # type: ignore
-
-        try:
-            self._client.stat_object(self.bucket, str(key))
-        except S3Error as exc:
-            if exc.code in ("NoSuchKey", "NoSuchObject", "NotFound"):
-                return False
-            raise
-        self._client.remove_object(self.bucket, str(key))
+        # S3's DeleteObject answers 204 whether or not the key was there, so the
+        # «was something there» half of the contract is a HeadObject first.
+        if not self._exists(str(key)):
+            return False
+        self._client.delete_object(Bucket=self.bucket, Key=str(key))
         return True
 
 
-#: The same two spellings StratiGraph Server reads, in the same order — one setting with
-#: two names and a precedence, never two settings that will one day disagree.
-#: Reading the SAME variables is what makes "the catalogue and the rooms share a
-#: bucket" true in configuration and not only in prose.
-_MINIO_KEYS = {
-    "endpoint": ("MINIO_ENDPOINT", "EM_ASSET_S3_ENDPOINT"),
-    "access_key": ("MINIO_ACCESS_KEY", "EM_ASSET_S3_ACCESS_KEY"),
-    "secret_key": ("MINIO_SECRET_KEY", "EM_ASSET_S3_SECRET_KEY"),
-    "bucket": ("MINIO_BUCKET", "EM_ASSET_S3_BUCKET"),
+#: The names StratiGraph Server reads, and ONLY those — one setting with one
+#: name. Reading the SAME variables is what makes "the catalogue and the rooms
+#: share a bucket" true in configuration and not only in prose. The scheme of
+#: the endpoint decides TLS (`http://` → plain), so there is no `_SECURE` here.
+_S3_KEYS = {
+    "endpoint": "EM_ASSET_S3_ENDPOINT",
+    "access_key": "EM_ASSET_S3_ACCESS_KEY",
+    "secret_key": "EM_ASSET_S3_SECRET_KEY",
+    "bucket": "EM_ASSET_S3_BUCKET",
 }
 
-
-def _minio_settings(env: Dict[str, str]) -> Optional[Dict[str, Any]]:
-    """The MinIO configuration, or None when there is none at all.
+def _s3_settings(env: Dict[str, str]) -> Optional[Dict[str, Any]]:
+    """The S3 configuration, or None when there is none at all.
 
     Half of it is an error, not a fallback: a deployment that named an endpoint
     and forgot the bucket must hear about it, because the alternative is a
     catalogue that came up storing its studies in RAM.
     """
     found: Dict[str, Any] = {}
-    for field, names in _MINIO_KEYS.items():
-        for name in names:
-            value = (env.get(name) or "").strip()
-            if value:
-                found[field] = value
-                break
+    for field, name in _S3_KEYS.items():
+        value = (env.get(name) or "").strip()
+        if value:
+            found[field] = value
     if not found:
         return None
-    missing = [f for f in _MINIO_KEYS if f not in found]
+    missing = [f for f in _S3_KEYS if f not in found]
     if missing:
         raise RuntimeError(
             f"the object store is half-configured: missing {', '.join(missing)}. "
@@ -340,17 +300,17 @@ def _minio_settings(env: Dict[str, str]) -> Optional[Dict[str, Any]]:
 
 
 def store_from_env(environ: Optional[Dict[str, str]] = None) -> ContainerStore:
-    """MinIO when configured; memory otherwise, loudly."""
+    """The S3 store when configured; memory otherwise, loudly."""
     env = environ if environ is not None else os.environ
-    settings = _minio_settings(dict(env))
+    settings = _s3_settings(dict(env))
     if settings:
-        return MinioContainerStore(**settings)
+        return S3ContainerStore(**settings)
     return InMemoryContainerStore()
 
 
 def describe(store: Any) -> str:
     """For `/health`. An operator who reads "memory" knows their studies die with
     the process, instead of finding out."""
-    if isinstance(store, MinioContainerStore):
-        return f"minio ({store.endpoint}, bucket {store.bucket}, prefix {STUDY_PREFIX})"
+    if isinstance(store, S3ContainerStore):
+        return f"s3 ({store.endpoint}, bucket {store.bucket}, prefix {STUDY_PREFIX})"
     return "memory"

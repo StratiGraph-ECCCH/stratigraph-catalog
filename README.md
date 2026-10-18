@@ -5,8 +5,8 @@
 > institutional deployment — is **3DR's** to build on the shared infrastructure.
 > This service exists so that the *contract* they build against is something
 > that RUNS. It is deliberately thin, it runs in the dev-stack, and everything
-> it demonstrates is meant to be reimplemented against WP6's CouchDB and MinIO
-> without anybody having to ask us what a study is.
+> it demonstrates is meant to be reimplemented against WP6's CouchDB and object
+> store without anybody having to ask us what a study is.
 >
 > Base: `StratiGraph_Catalog_SPEC_per_3DR.md` (CNR → 3DR). Division of labour,
 > from §9 of that spec: **CNR provides the contract, 3DR builds and deploys.**
@@ -199,7 +199,7 @@ answers *exactly* like the dev one, and it says so by name when there is no
 CouchDB to measure against. Start one to run it (the dev-stack `couchdb`
 profile).
 
-In the dev-stack, with MinIO, Keycloak and the rest around it:
+In the dev-stack, with RustFS (the S3 store), Keycloak and the rest around it:
 
 ```bash
 cd ../StratiGraph Server/dev-stack
@@ -226,7 +226,7 @@ store.
 
 | variable | what it does |
 |---|---|
-| `MINIO_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | the container store. **The same variables StratiGraph Server reads** — one bucket, two prefixes. Half of them set is a startup refusal, never a fallback to memory |
+| `EM_ASSET_S3_ENDPOINT` / `_ACCESS_KEY` / `_SECRET_KEY` / `_BUCKET` | the container store, any S3-compatible object store (RustFS in the dev-stack), reached with `boto3`. **The same variables StratiGraph Server reads** — one bucket, two prefixes. The endpoint's scheme decides TLS (`http://` → plain). Half of them set is a startup refusal, never a fallback to memory; so is an old pre-RustFS name set without its `EM_ASSET_S3_*` replacement — the refusal names the variable to rename |
 | `EM_CATALOG_DB` | the dev index file (SQLite). Absent → `:memory:` |
 | `COUCHDB_URL` / `_USER` / `_PASSWORD` / `_DATABASE` | the deploy index. Set → used; unset → SQLite. Never chosen silently |
 | `OIDC_ISSUER` (or `TOKEN_ENDPOINT`), `OIDC_AUDIENCE` (or `CLIENT_ID_em`) | Keycloak. Half-configured → the process refuses to start |

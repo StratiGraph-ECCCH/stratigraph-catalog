@@ -38,7 +38,7 @@ ARG S3DGRAPHY_EXTRAS="rdf"
 WORKDIR /srv/em-catalog
 
 COPY pyproject.toml README.md ./
-# PyJWT and minio are here and not behind a build arg, for the reason StratiGraph Server
+# PyJWT and boto3 are here and not behind a build arg, for the reason StratiGraph Server
 # states: an image that cannot verify a token comes up open, and an image that
 # cannot reach the object store keeps its studies in a process that dies.
 RUN set -eu; \
@@ -46,7 +46,7 @@ RUN set -eu; \
     spec="s3dgraphy${S3DGRAPHY_EXTRAS:+[${S3DGRAPHY_EXTRAS}]}==${S3DGRAPHY_VERSION}"; \
     pip install --upgrade pip && \
     pip install "$spec" "fastapi>=0.110" "uvicorn[standard]>=0.27" \
-                "PyJWT[crypto]>=2.8" "minio>=7.2"
+                "PyJWT[crypto]>=2.8" "boto3>=1.34"
 
 COPY app ./app
 

@@ -8,7 +8,7 @@ institutional deployment — is **3DR's** to build on the shared infrastructure.
 This service exists so that the contract they build against is something that
 RUNS: register a study, search it, fetch it back, open it in an app. It is
 deliberately thin, and everything it demonstrates is meant to be reimplemented
-against WP6's CouchDB and MinIO without asking us what a study is.
+against WP6's CouchDB and object store without asking us what a study is.
 
 **The one principle, from which everything else follows.**
 

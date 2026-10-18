@@ -17,7 +17,7 @@ Two implementations, one interface:
   real query and not a scan, so the shape of the filters is honest about what an
   index has to be able to do.
 * **CouchDB** (deploy) — behind the same interface, **config-gated exactly like
-  the MinIO store**: it is used when it is configured, and never chosen silently.
+  the S3 store**: it is used when it is configured, and never chosen silently.
   A catalogue that half-fell-back to a local file while its operator believed
   the records were in CouchDB is the failure this arrangement exists to prevent.
 
@@ -468,7 +468,7 @@ class CouchDbCatalogIndex:
     Written against CouchDB's HTTP API with the standard library, because adding
     a client library to talk JSON over HTTP would be a dependency for a habit.
 
-    **Config-gated, exactly like the MinIO store.** It is constructed only when
+    **Config-gated, exactly like the S3 store.** It is constructed only when
     the deployment names a CouchDB, and it never becomes the choice by accident.
     The constructor REACHES the server (`PUT` the database if missing) so a wrong
     URL or a wrong password is a startup failure with a sentence, not a 500 on
@@ -611,7 +611,7 @@ class CouchDbCatalogIndex:
 def index_from_env(environ: Optional[Dict[str, str]] = None) -> CatalogIndex:
     """CouchDB when configured, SQLite otherwise — and never a silent third thing.
 
-    Half a CouchDB configuration is an error for the same reason half a MinIO one
+    Half a CouchDB configuration is an error for the same reason half an S3 one
     is: an operator who set `COUCHDB_URL` and mistyped the password must hear
     about it, rather than run a catalogue whose records are quietly in a file
     nobody backs up.
