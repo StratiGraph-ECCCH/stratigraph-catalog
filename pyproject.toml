@@ -24,7 +24,7 @@ dependencies = [
     # `[rdf]` is what makes `/catalog/study/{id}/ttl` a real endpoint rather than
     # an honest 501. `[geo]` is NOT taken: this service never reprojects — it
     # reads a site position that is already in WGS84 and hands it to the index.
-    "s3dgraphy[rdf]>=1.6.0.dev13",
+    "s3dgraphy[rdf]>=1.6.0.dev59",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     # Auth is a HARD dependency for the same reason as in StratiGraph Server: a build that
