@@ -7,7 +7,7 @@ name = "stratigraph-catalog"
 # Kept in step with `app/main.py.__version__`; static metadata cannot
 # import, so this is the one unavoidable repetition and a test refuses a
 # disagreement. See that module for what the number means.
-version = "1.6.0.dev1"
+version = "1.6.0.dev2"
 description = "The StratiGraph Catalog — REFERENCE implementation of the study contract (studies are em.json containers; the index is derived)"
 readme = "README.md"
 requires-python = ">=3.10"
