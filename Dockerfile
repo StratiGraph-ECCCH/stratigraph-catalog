@@ -50,6 +50,22 @@ RUN set -eu; \
 
 COPY app ./app
 
+# ── LA PAGINA DI LETTURA VIAGGIA CON L'IMMAGINE (1 novembre 2026) ───────────
+#
+# `/study/{id}/narrative` serve il reader di EMStudio, cioè una `dist/` costruita
+# con `npm run build:reader`. Fino a ieri arrivava SOLO dal bind mount del
+# dev-stack (`../../EMStudio/frontend/dist`), e l'immagine pubblicata rispondeva
+# 501: un nodo acceso dalle sole immagini — il nodo da campo, e domani quello
+# istituzionale — non aveva la narrativa.
+#
+# La `dist` la mette in `reader-dist/` il workflow `immagine.yml`, da un tag
+# PINNATO di EMStudio (`EMSTUDIO_REF` là), prima del build. In un checkout la
+# cartella porta solo il suo README: un `docker build` locale non clona niente,
+# l'immagine nasce senza reader e dice 501 come prima — e il dev-stack la copre
+# comunque col suo mount, che vince su questa copia.
+COPY reader-dist /srv/em-reader-dist
+ENV EM_CATALOG_READER=/srv/em-reader-dist
+
 # The licence text travels WITH the software, and not only in the repository.
 # Publishing an image IS distributing, which is the act the GPL's obligations
 # attach to, so the text has to be inside the thing that gets distributed.
@@ -93,6 +109,9 @@ RUN set -eu; \
 # `scripts/verifica-tirata-anonima.sh` li confronta a ogni pubblicazione. Una
 # sola delle due fonti non avrebbe niente contro cui essere sbagliata.
 LABEL org.stratigraph.s3dgraphy.version="${S3DGRAPHY_VERSION}"
+# Quale EMStudio ha dato il reader: vuoto in un build locale, che non ne ha.
+ARG EMSTUDIO_REF=""
+LABEL org.stratigraph.emstudio.reader.ref="${EMSTUDIO_REF}"
 
 
 # ── NOT ROOT, AND NOT A NAMED USER EITHER ────────────────────────────────────

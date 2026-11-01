@@ -128,6 +128,29 @@ jobs:
           echo "versione=$v" >> "$GITHUB_OUTPUT"
           echo "s3dgraphy $v" >> "$GITHUB_STEP_SUMMARY"
 
+      # IL READER DI EMSTUDIO, DENTRO L'IMMAGINE (1 novembre 2026). Un tag
+      # PINNATO e non `main`: l'immagine dice quale pagina di lettura porta
+      # (l'etichetta `org.stratigraph.emstudio.reader.ref`), e cambiarla è
+      # alzare questa riga. Node 20 come nei workflow di EMStudio. Il
+      # Dockerfile copia `reader-dist/`; senza questo passo resterebbe vuota e
+      # `/study/{id}/narrative` risponderebbe 501.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Il reader di EMStudio
+        env:
+          EMSTUDIO_REF: v1.6.0-dev.95
+        run: |
+          git clone --quiet --depth 1 --branch "$EMSTUDIO_REF" \
+            https://github.com/ExtendedMatrix/EMStudio.git "$RUNNER_TEMP/emstudio"
+          cd "$RUNNER_TEMP/emstudio/frontend"
+          npm ci --no-audit --no-fund
+          npm run build:reader
+          test -f dist/reader.html
+          cp -R dist/. "$GITHUB_WORKSPACE/reader-dist/"
+          echo "EMSTUDIO_REF=$EMSTUDIO_REF" >> "$GITHUB_ENV"
+          echo "reader: EMStudio $EMSTUDIO_REF" >> "$GITHUB_STEP_SUMMARY"
+
       # QEMU: è ciò che permette a un runner amd64 di costruire anche arm64.
       # Serve perché le due parti che devono tirare questa immagine NON sono
       # sulla stessa architettura — PSNC è amd64, il nodo di campo è un
@@ -178,6 +201,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             S3DGRAPHY_VERSION=${{ steps.s3d.outputs.versione }}
+            EMSTUDIO_REF=${{ env.EMSTUDIO_REF }}
           provenance: false
 
       # Il DIGEST nel sommario del job, perché è l'unico nome che identifica
@@ -202,10 +226,17 @@ jobs:
           tags: em-verifica-contenuto:locale
           build-args: |
             S3DGRAPHY_VERSION=${{ steps.s3d.outputs.versione }}
+            EMSTUDIO_REF=${{ env.EMSTUDIO_REF }}
           provenance: false
 
       - name: L'etichetta e il contenuto dicono la stessa cosa
         run: ./scripts/verifica-contenuto.sh em-verifica-contenuto:locale
+
+      - name: Il reader è dentro
+        run: |
+          docker run --rm --entrypoint sh em-verifica-contenuto:locale \
+            -c 'test -f "$EM_CATALOG_READER/reader.html"' \
+            || { echo "::error::l'immagine non porta il reader di EMStudio"; exit 1; }
 
       - name: Il digest, scritto dove si legge
         run: |

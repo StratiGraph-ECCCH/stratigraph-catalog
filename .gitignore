@@ -22,3 +22,8 @@ em-catalog.db
 
 # macOS
 .DS_Store
+
+# The EMStudio reader, built into `reader-dist/` by the image workflow: never
+# committed — the image carries it, the repository carries only the README.
+reader-dist/*
+!reader-dist/README.md

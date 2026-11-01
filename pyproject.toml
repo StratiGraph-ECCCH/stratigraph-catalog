@@ -7,7 +7,7 @@ name = "stratigraph-catalog"
 # Kept in step with `app/main.py.__version__`; static metadata cannot
 # import, so this is the one unavoidable repetition and a test refuses a
 # disagreement. See that module for what the number means.
-version = "1.6.0.dev2"
+version = "1.6.0.dev3"
 description = "The StratiGraph Catalog — REFERENCE implementation of the study contract (studies are em.json containers; the index is derived)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,7 +24,11 @@ dependencies = [
     # `[rdf]` is what makes `/catalog/study/{id}/ttl` a real endpoint rather than
     # an honest 501. `[geo]` is NOT taken: this service never reprojects — it
     # reads a site position that is already in WGS84 and hands it to the index.
-    "s3dgraphy[rdf]>=1.6.0.dev59",
+    # dev83 e non più dev59 (1 novembre 2026): il workflow dell'immagine legge
+    # QUESTO numero quando il repository non ha la variabile S3DGRAPHY_VERSION,
+    # e non ce l'ha — così l'immagine 1.6.0-dev.2 è uscita con dev59 mentre lo
+    # stack la costruisce con dev83 (l'ancora del compose di stratigraph-server).
+    "s3dgraphy[rdf]>=1.6.0.dev83",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     # Auth is a HARD dependency for the same reason as in StratiGraph Server: a build that
