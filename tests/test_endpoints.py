@@ -241,7 +241,7 @@ def _with_narrative(doc, *, blocks=None):
 
 def test_the_reading_page_is_served_and_is_the_built_bundle(client):
     answer = client.get("/catalog/reader/reader.html")
-    if answer.status_code == 404:
+    if answer.status_code in (404, 501):     # 501: il bundle non è costruito qui (CI)
         import pytest
         pytest.skip("no reading page bundled — run `npm run build:reader` in EMStudio")
     assert answer.status_code == 200
@@ -261,7 +261,7 @@ def test_the_reading_page_gets_its_assets_from_the_same_mount(client):
     import re
 
     shell = client.get("/catalog/reader/reader.html")
-    if shell.status_code == 404:
+    if shell.status_code in (404, 501):     # 501: il bundle non è costruito qui (CI)
         import pytest
         pytest.skip("no reading page bundled in this checkout")
     refs = [r for r in re.findall(r'(?:src|href)="([^"]+)"', shell.text)
@@ -386,7 +386,7 @@ def test_the_reading_page_itself_needs_no_token(client, realm):
     """It is a program, not a study: it carries no data, and what it reads is
     behind the visibility rule rather than in the page."""
     answer = client.get("/catalog/reader/reader.html")
-    if answer.status_code == 404:
+    if answer.status_code in (404, 501):     # 501: il bundle non è costruito qui (CI)
         import pytest
         pytest.skip("no reading page bundled in this checkout")
     assert answer.status_code == 200

@@ -40,7 +40,9 @@ def test_the_vendored_brand_is_the_SHARED_one_and_was_not_edited_here():
     shared = (pathlib.Path(__file__).resolve().parent.parent.parent
               / "stratigraph-brand" / "stratigraph-theme.css")
     if not shared.is_file():                    # no sibling checkout in CI
-        assert "stratigraph-brand" in here
+        # the shared theme names itself in its first lines (6 Nov 2026: the
+        # header says «the shared theme», no longer the repository's name)
+        assert "the shared theme" in here[:400] or "stratigraph-brand" in here
         return
     assert here == shared.read_text(encoding="utf-8"), \
         "app/brand/ has drifted from stratigraph-brand/ — re-run ./sync-brand.sh"
