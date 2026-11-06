@@ -1,0 +1,48 @@
+# LE PROVE A OGNI SPINTA (6 nov 2026, E.D.: «integrazione continua»).
+#
+# Le stesse che si lanciano sul Mac, su ogni spinta a main e su ogni proposta
+# di modifica. Il workflow `immagine` costruisce e pubblica quando la versione
+# cambia; questo dice, prima, se il codice regge. Le prove che vogliono un
+# repository accanto (stratigraph-templates) o un file dei partner si saltano
+# da sole, e lo dicono.
+name: prove
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"     # quella del Dockerfile
+          cache: pip
+      - name: Il catalogo con le sue dipendenze
+        #: LA CORSA CON PyPI: la catena di rilascio spinge qui il commit che
+        #: chiede la nuova s3dgraphy qualche minuto PRIMA che compaia su PyPI.
+        #: Se manca proprio s3dgraphy si aspetta e si riprova, fino a 15
+        #: minuti; ogni altro errore ferma subito.
+        run: |
+          for prova in $(seq 1 30); do
+            if pip install --no-cache-dir -e ".[dev]" 2> pip.err; then
+              exit 0
+            fi
+            if grep -q "No matching distribution found for s3dgraphy" pip.err; then
+              echo "s3dgraphy non è ancora su PyPI: riprovo fra 30 s ($prova/30)"
+              sleep 30
+            else
+              cat pip.err; exit 1
+            fi
+          done
+          cat pip.err
+          echo "s3dgraphy non è arrivata su PyPI in 15 minuti"; exit 1
+      - name: Le prove
+        run: python -m pytest -q -p no:cacheprovider
