@@ -381,7 +381,20 @@ async function boot() {
     nodeUrl = (salute && salute.node) || "";
   } catch { nodeUrl = ""; }
   if (nodeUrl) {
-    const { mountBar } = await import(`${nodeUrl}/admin/bar.js`)
+    // LA BARRA STA IN CASA (12 novembre 2026). `bar.js` è un file della casa del
+    // nodo, e dove sta la casa lo dice il nodo: `/v1/node` → `faces`, la faccia
+    // `home` (prima dell'11 novembre si chiamava `admin`, `/admin/`). Chiesto e
+    // non scritto, così il prossimo cambio di nome il catalogo non lo vede.
+    // Il PERCORSO, non l'`url` della faccia: l'`url` è fatto col nome pubblico
+    // del nodo, che non sempre è l'indirizzo che questo servizio conosce.
+    const node = nodeUrl.replace(/\/+$/, "");
+    const faces = await call(`${node}/v1/node`, "GET")
+      .then((n) => (n && Array.isArray(n.faces) ? n.faces : []))
+      .catch(() => []);
+    const house = ["home", "admin"]
+      .map((key) => (faces.find((f) => f && f.key === key) || {}).path)
+      .find((p) => typeof p === "string" && p.startsWith("/")) || "/home/";
+    const { mountBar } = await import(`${node}${house.replace(/\/?$/, "/")}bar.js`)
       .catch(() => ({ mountBar: null }));
     if (mountBar) {
       await mountBar($("node-bar"), {
