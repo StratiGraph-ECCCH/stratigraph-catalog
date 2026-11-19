@@ -163,11 +163,22 @@ POST   /catalog/reindex                         rebuild from the containers [tok
 ```
 
 **Visibility.** A study whose header says `visibility: public` is served without
-a token — that is what publishing means. Everything else is 401 without and 200
-with, and **restricted is the default**: the failure directions are not
-symmetric. An anonymous catalogue listing shows the public studies rather than a
-401 or an empty list, because discovery is the point and work in progress must
-not leak while it happens.
+a token — that is what publishing means (an embargo still running counts as
+not public). Everything else is 401 without a token, and **restricted is the
+default**: the failure directions are not symmetric. An anonymous catalogue
+listing shows the public studies rather than a 401 or an empty list, because
+discovery is the point and work in progress must not leak while it happens.
+
+**Signing in is not a grant** (E.D., 19 Nov 2026). For a study that is not
+public now, the **card** (`/study/{id}`) is shown to anybody signed in — it is
+how a study is found and how somebody knows whom to ask. Its **content**
+(`/emjson`, `/ttl`, `/narrative`, `/open`) opens only to a **role in the
+study's room**: the container names it in `header.room`, and the catalogue asks
+the node `GET /v1/rooms` with the caller's own token (`app/doorman.py`). No
+role → 403 naming the room; no room named → 403 for everybody; node not
+configured, down or slow → **503, and the door stays shut**. The answer is
+remembered 30 s per token (`EM_CATALOG_ROLE_TTL`). Dev mode (no OIDC) stays
+open, as the node's does.
 
 **"Open in…"** returns a *descriptor*, not a redirect, and marks what is
 proposed. The `emjson` URL works today in all three apps; the custom scheme
@@ -231,6 +242,8 @@ store.
 | `COUCHDB_URL` / `_USER` / `_PASSWORD` / `_DATABASE` | the deploy index. Set → used; unset → SQLite. Never chosen silently |
 | `OIDC_ISSUER` (or `TOKEN_ENDPOINT`), `OIDC_AUDIENCE` (or `CLIENT_ID_em`) | Keycloak. Half-configured → the process refuses to start |
 | `EM_CATALOG_READER` | the built EMStudio reader — the **`dist/` directory**, shell plus `assets/`. A `…/reader.html` path is accepted too and read as "the shell" (its parent is the dist). Unset → the sibling checkout. Absent → an honest 501 |
+| `EM_CATALOG_NODE_INTERNAL` | where this catalogue DIALS its node to ask who holds a role in a study's room (`GET /v1/rooms`). Unset → `EM_CATALOG_NODE_URL` when it is an absolute http(s) URL; neither → the content of non-public studies is 503 |
+| `EM_CATALOG_ROLE_TTL` / `EM_CATALOG_NODE_TIMEOUT` | how long a token's rooms are remembered (default 30 s, `0` asks every time) / how long the node may take (default 3 s) before the answer is 503 |
 | `EM_CATALOG_PUBLIC_URL` | the public base written into "open in" answers, when the proxy does not forward the host |
 | `EM_CATALOG_LABEL` | how this catalogue names ITSELF in a federated twin search. Unset → «this catalogue», which is true and useless exactly when something else is federated with it |
 | `EM_CATALOG_EMSTUDIO_URL`, `EM_CATALOG_HERIVERSE_URL` | where those apps live, for the deep links |

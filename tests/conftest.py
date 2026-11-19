@@ -31,6 +31,8 @@ from s3dgraphy.nodes.heritage_entity_node import (              # noqa: E402
     HeritageEntityNode)
 
 ORCID = "0000-0002-1825-0097"
+#: the room the restricted study names — where a role opens its content
+RESTRICTED_ROOM = "scavo-in-corso"
 
 
 def study_document(graph_id="sarmizegetusa-2026", *, title="Sarmizegetusa 2026",
@@ -39,7 +41,8 @@ def study_document(graph_id="sarmizegetusa-2026", *, title="Sarmizegetusa 2026",
                    hdt=("hdt_sarm", "Sarmizegetusa HDT",
                         "https://example.org/h/sarm"),
                    entity=("hc1_sarm", "Sarmizegetusa Regia"),
-                   units=("US 1", "US 2"), site=(45.62, 23.31), embargo=None):
+                   units=("US 1", "US 2"), site=(45.62, 23.31), embargo=None,
+                   room=None):
     """One study, as a container DOCUMENT — the shape a catalogue receives."""
     graph = Graph(graph_id=graph_id)
     graph.name = {"default": title}
@@ -58,6 +61,8 @@ def study_document(graph_id="sarmizegetusa-2026", *, title="Sarmizegetusa 2026",
                                           entity_kind="site"))
     container = container_of(graph)
     container.header = {"visibility": visibility, "title": title}
+    if room:
+        container.header["room"] = room
     return build_container(container)
 
 
@@ -73,7 +78,8 @@ def restricted_study():
                           license="CC-BY-NC-4.0", visibility="restricted",
                           hdt=("hdt_sarm", "Sarmizegetusa HDT",
                                "https://example.org/h/sarm"),
-                          entity=None, units=("US 10",), site=None)
+                          entity=None, units=("US 10",), site=None,
+                          room=RESTRICTED_ROOM)
 
 
 @pytest.fixture()
@@ -146,10 +152,11 @@ def realm(monkeypatch):
         jwks_uri=f"{ISSUER}/protocol/openid-connect/certs")
     authenticator._jwks = _Keys()
 
-    def token(*, audience=AUDIENCE, issuer=ISSUER, expired=False):
+    def token(*, audience=AUDIENCE, issuer=ISSUER, expired=False,
+              subject="0000-0002-1825-0097"):
         now = datetime.datetime.now(datetime.timezone.utc)
         claims = {
-            "sub": "0000-0002-1825-0097", "iss": issuer, "aud": audience,
+            "sub": subject, "iss": issuer, "aud": audience,
             "exp": now + datetime.timedelta(minutes=-5 if expired else 30),
             "iat": now - datetime.timedelta(minutes=1),
             "preferred_username": "dev",
@@ -162,3 +169,72 @@ def realm(monkeypatch):
     finally:
         authenticator.settings = previous_settings
         authenticator._jwks = previous_jwks
+
+
+# ── a node that answers «which rooms do I hold a role in» ────────────────────
+#
+# A REAL HTTP server on a loopback port, not a patched function: what is
+# measured is the catalogue's actual request — URL, header, timeout, parsing —
+# against the shape the node's `GET /v1/rooms` returns. Roles are keyed by the
+# token's `sub`, which is what the node resolves too (an ORCID).
+
+@pytest.fixture()
+def node(monkeypatch):
+    import base64
+    import json
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from app.doorman import doorman
+
+    grants = {}          # sub → {room_id: role}
+    seen = []            # the Authorization headers the node received
+
+    class _Node(BaseHTTPRequestHandler):
+        def log_message(self, *args):     # quiet
+            pass
+
+        def do_GET(self):
+            if self.path != "/v1/rooms":
+                self.send_response(404); self.end_headers(); return
+            header = self.headers.get("Authorization") or ""
+            seen.append(header)
+            token = header.partition(" ")[2]
+            try:
+                body = token.split(".")[1]
+                body += "=" * (-len(body) % 4)
+                sub = json.loads(base64.urlsafe_b64decode(body))["sub"]
+            except Exception:
+                self.send_response(401); self.end_headers(); return
+            rooms = [{"room_id": r, "title": r, "container_refs": [r],
+                      "your_role": role}
+                     for r, role in grants.get(sub, {}).items()]
+            payload = json.dumps(rooms).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Node)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    monkeypatch.setenv("EM_CATALOG_NODE_INTERNAL",
+                       f"http://127.0.0.1:{server.server_address[1]}")
+    monkeypatch.delenv("EM_CATALOG_ROLE_TTL", raising=False)
+    doorman.forget()
+
+    class _Handle:
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        requests = seen
+
+        @staticmethod
+        def grant(sub, room, role="viewer"):
+            grants.setdefault(sub, {})[room] = role
+
+    try:
+        yield _Handle
+    finally:
+        server.shutdown()
+        server.server_close()
+        doorman.forget()

@@ -358,11 +358,13 @@ def test_a_public_study_is_readable_without_a_token(client, public_study):
     assert "emjson=%2Fcatalog%2Fstudy%2F" in answer.text
 
 
-def test_a_restricted_study_is_not_readable_without_one(client, realm,
+def test_a_restricted_study_is_not_readable_without_one(client, realm, node,
                                                         public_study,
                                                         restricted_study):
     """The dissemination surface obeys the study, like every other route: a
     study nobody published is not readable just because the reading page is."""
+    from conftest import ORCID, RESTRICTED_ROOM
+    node.grant(ORCID, RESTRICTED_ROOM, "viewer")
     head = {"Authorization": f"Bearer {realm()}"}
     a = client.post("/catalog/studies", json=_with_narrative(public_study),
                     headers=head)

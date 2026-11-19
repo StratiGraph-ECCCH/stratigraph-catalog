@@ -67,9 +67,13 @@ def test_a_public_study_is_served_without_a_token(client, realm, public_study,
         assert answer.status_code == 200, (route, answer.text)
 
 
-def test_a_restricted_study_is_401_without_and_200_with(client, realm,
+def test_a_restricted_study_is_401_without_and_200_with(client, realm, node,
                                                         public_study,
                                                         restricted_study):
+    """…200 with a token AND a role in the study's room: the content asks for a
+    grant (see `test_role_door.py`), the card for a signature."""
+    from conftest import ORCID, RESTRICTED_ROOM
+    node.grant(ORCID, RESTRICTED_ROOM, "viewer")
     _, restricted_id = _seed(client, public_study, restricted_study, realm)
     head = {"Authorization": f"Bearer {realm()}"}
     for route in ("", "/emjson", "/ttl", "/open"):

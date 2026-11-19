@@ -65,6 +65,7 @@ from . import aliases
 from .auth import AuthDependency, authenticator
 from .deeplink import APPS, open_targets
 from .deeplink import describe as deeplink_describe
+from .doorman import doorman, node_base, room_of
 from .index import describe as index_describe
 from .index import group_by_hc1, group_by_hdt, hdt_key, index_from_env
 from .store import describe as store_describe
@@ -207,6 +208,10 @@ def _health() -> Health:
             # honest 501 — a client can read it here instead of discovering it
             # by trying, and an operator can tell a missing mount from a bug
             "reading_page": _reader_shell() is not None,
+            # whether the content of a study that is not public can be opened
+            # at all: it takes a role in the study's room, and the catalogue
+            # asks the node (`app/doorman.py`). False → those answers are 503.
+            "room_roles": bool(node_base()),
         },
         auth=authenticator.settings.describe(),
         container_store=store_describe(STORE),
@@ -243,11 +248,24 @@ def _mint_study_id() -> str:
 def _card_of(doc: Dict[str, Any], study_id: str) -> Dict[str, Any]:
     """The card, derived by the LIBRARY. One reader of containers, not two."""
     try:
-        return em.study_metadata(doc, study_id=study_id)
+        return _with_room(em.study_metadata(doc, study_id=study_id), doc)
     except Exception as exc:
         raise HTTPException(
             status_code=400,
             detail=f"not a readable em.json container: {exc}") from None
+
+
+def _with_room(card: Dict[str, Any], doc: Dict[str, Any]) -> Dict[str, Any]:
+    """…plus the ROOM the container names (`header.room`), always as a key.
+
+    The one fact the catalogue adds to the library's card, because the door to a
+    study's content is a role in that room (see `app/doorman.py`). Written even
+    when it is None, so a card indexed before this key existed — which lacks it —
+    can be told from a study that names no room, and the container is read
+    instead of guessing.
+    """
+    card["room"] = room_of(doc.get("header") if isinstance(doc, dict) else None)
+    return card
 
 
 def _public_base(request: Request) -> str:
@@ -312,27 +330,88 @@ def is_public_now(card: Dict[str, Any]) -> bool:
     return not embargo_active(card.get("embargo"))
 
 
+def _signed_token(request: Request, token: Optional[str]) -> Optional[str]:
+    """Check the caller's signature and return the RAW token (None in dev mode).
+
+    The header wins; `?token=` is accepted beside it because a viewer (Mirador,
+    a browser opening a link, the reading page fetching its container) cannot
+    set one. 401 without either, as before.
+    """
+    header = request.headers.get("authorization") or ""
+    if header.lower().startswith("bearer ") or not token:
+        authenticator.require_token(request)
+        if not authenticator.settings.enforcing:
+            return None
+        return header.partition(" ")[2].strip()
+    if not authenticator.settings.enforcing:
+        return None
+    authenticator.verify(token.strip())
+    return token.strip()
+
+
 def _require_visible(card: Dict[str, Any], request: Request,
                      token: Optional[str] = None) -> None:
-    """A public study is served to anybody; anything else needs a token.
+    """The CARD: public to anybody, otherwise to anybody who has signed in.
 
-    Same rule as an StratiGraph Server room, and the same reasoning: `public` is the
-    dissemination tier — validated work, meant to be read — and everything else
-    is in progress. `?token=` is accepted beside the header because a viewer
-    (Mirador, a browser opening a link) cannot set one.
+    This is the catalogue's own depth, and it is deliberately shallower than a
+    room's door: a card is the title, the authors, the licence, where the thing
+    is — what makes a study findable, and what somebody needs in order to ask
+    for access to it. The CONTENT (the container, its projections, the reading
+    page, the "open in" descriptor) asks for a role: see :func:`_require_role`.
+    E.D. 19 Nov 2026 named «quei dati» — the content — and the card stays where
+    it was by decision, not by omission.
 
-    An **embargo** counts as "anything else" until it expires: see
+    An **embargo** counts as "not public" until it expires: see
     :func:`is_public_now`.
     """
     if is_public_now(card):
         return
-    header = request.headers.get("authorization") or ""
-    if header.lower().startswith("bearer ") or not token:
-        authenticator.require_token(request)
+    _signed_token(request, token)
+
+
+def _require_role(card: Dict[str, Any], request: Request,
+                  token: Optional[str] = None,
+                  doc: Optional[Dict[str, Any]] = None) -> None:
+    """The CONTENT of a study that is not public now: an explicit role in its room.
+
+    E.D., 19 Nov 2026: «se ti viene concessa puoi. Se NON hai esplicito accesso
+    non devi poter vedere quei dati». Signing in is not a grant. So, in order:
+
+    * public and out of embargo → anybody, no question asked;
+    * no valid token → 401 (go and sign in);
+    * the study names no room → 403: nobody holds a role in a room that does
+      not exist, and a room guessed from a code would be a grant nobody gave;
+    * the node says this token holds no role in that room → 403, saying that
+      access is what is missing — not that the study does not exist;
+    * the node cannot be asked → 503 from the doorman, and the door stays shut.
+
+    Dev mode (no OIDC at all) has no identities to tell apart and stays open,
+    exactly as the node's dev mode makes everybody owner.
+    """
+    if is_public_now(card):
         return
-    if not authenticator.settings.enforcing:
+    raw = _signed_token(request, token)
+    if raw is None:
         return
-    authenticator.verify(token.strip())
+    if "room" in card:
+        room = card.get("room")
+    else:       # a card indexed before the key existed: ask the container
+        if doc is None:
+            doc = STORE.get(str(card.get("id") or "")) or {}
+        room = room_of(doc.get("header"))
+    if not room:
+        raise HTTPException(
+            status_code=403,
+            detail="this study is not public, and it names no room on this "
+                   "node — so nobody holds the role that would open it. Its "
+                   "owner can name the room (header.room) and grant access there.")
+    role = doorman.roles(raw).get(room)
+    if not role:
+        raise HTTPException(
+            status_code=403,
+            detail=f"this study is not public, and reading it needs access: a "
+                   f"role in its room {room!r} on this node, which you do not "
+                   f"hold. Ask the study's owner to grant it.")
 
 
 def _load_or_404(study_id: str) -> Dict[str, Any]:
@@ -747,7 +826,7 @@ def get_study_emjson(study_id: str, request: Request,
     import json
 
     card = _card_or_404(study_id)
-    _require_visible(card, request, token)
+    _require_role(card, request, token)
     doc = _load_or_404(study_id)
     return Response(
         content=json.dumps(doc, ensure_ascii=False),
@@ -771,7 +850,7 @@ def get_study_ttl(study_id: str, request: Request,
     501 without rdflib — the request was fine, this build simply cannot.
     """
     card = _card_or_404(study_id)
-    _require_visible(card, request, token)
+    _require_role(card, request, token)
     doc = _load_or_404(study_id)
 
     graphs = doc.get("graphs") or {}
@@ -826,7 +905,8 @@ def read_study(study_id: str, request: Request,
 
     The visibility rule is the study's, as everywhere else: a `public` study is
     read without a token — that is what publishing means — and anything else is
-    401 without one. The token is passed through to the page in the URL because a
+    401 without one and 403 without a role in the study's room
+    (:func:`_require_role`). The token is passed through to the page in the URL because a
     browser fetching a document cannot set a header; the page uses it for that
     one request and does not keep it.
 
@@ -834,7 +914,7 @@ def read_study(study_id: str, request: Request,
     alternative is a blank page that looks like the study is empty.
     """
     card = _card_or_404(study_id)
-    _require_visible(card, request, token)
+    _require_role(card, request, token)
 
     if _reader_shell() is None:
         raise HTTPException(status_code=501, detail=READER_MISSING)
@@ -1010,7 +1090,7 @@ def open_study(study_id: str, request: Request,
     always fetch, and a 302 would take that decision away and get it wrong.
     """
     card = _card_or_404(study_id)
-    _require_visible(card, request, token)
+    _require_role(card, request, token)
     apps = [app] if app else None
     try:
         return open_targets(study_id, emjson_url=_container_url(request, study_id),
@@ -1133,7 +1213,8 @@ def reindex() -> Reindexed:
             unreadable.append(study_id)
             continue
         try:
-            cards.append(em.study_metadata(doc, study_id=study_id))
+            cards.append(_with_room(em.study_metadata(doc, study_id=study_id),
+                                    doc))
         except Exception:
             unreadable.append(study_id)
     # RE-READ THE ALIASES FIRST. They live in the object store precisely so a
